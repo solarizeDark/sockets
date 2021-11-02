@@ -14,6 +14,7 @@
 #include <netinet/in.h>
 #include <net/if.h>
 #include <linux/if.h>
+#include <unistd.h>
 
 #include "server.h"
 
@@ -38,26 +39,6 @@ struct in_addr get_local_ip () {
 	return ((struct sockaddr_in*) &ifr.ifr_addr) -> sin_addr;
 }
 
-char* array_concat(char *str, char *arr, int recieved) {
-
-	int str_size = 0;
-	while (*str++ != '\0') str_size++;
-
-	int res_size = str_size + recieved;
-	char *res = (char*) malloc (sizeof(char) * res_size); 
-
-	while((*res++ = *str++) != '\0') 
-		;
-
-	int i = 0;
-	for (char *p = res; p != res + res_size - str_size; p++, i++) {
-		*res = arr[i];
-	}
-
-	return res;
-	
-}
-
 struct sockaddr_in * network_setting() {
 
 	struct sockaddr_in *host = (struct sockaddr_in*) malloc (sizeof(struct sockaddr_in));
@@ -75,20 +56,15 @@ void* client_handler(void *args) {
 
 	thread_args_p args_p = (thread_args_p) args;
 	
-	struct sockaddr_storage client_addr;
-	socklen_t addrsize = sizeof client_addr;
-
-	int new_client_fd = accept(args_p->socket_d, (struct sockaddr *) &client_addr, &addrsize);
-
 	char *ip;
 	{	
 		// evil casting sockaddr_storage to sockaddr_in
-		struct sockaddr	*client_sockaddr = (struct sockaddr *) &client_addr;
-		struct sockaddr_in *client_sockaddr_in = (struct sockaddr_in *) client_sockaddr; 
+		struct sockaddr	   *client_sockaddr 	= (struct sockaddr *) 	 	&(args_p->client_addr);
+		struct sockaddr_in *client_sockaddr_in 	= (struct sockaddr_in *) 	client_sockaddr; 
 		ip = inet_ntoa(client_sockaddr_in->sin_addr);
 	}
 	
-	printf("%s\n", ip);
+	printf("Client ip: %s\n", ip);
 
 	message_p local;
 
@@ -99,16 +75,16 @@ void* client_handler(void *args) {
 	}
 	pthread_mutex_unlock(&mutex);
 
+	char *income = (char*) malloc (sizeof(char) * 2000);
+	int recieved;
+
+	while (1) {
 	
-	while (true) {
+		if ((recieved = recv(args_p->socket_d, income, 2000, 0)) > 0) {
 
-		char income[2000];
-		int recieved;
-		
-		if ((recieved = recv(args_p->socket_d, income, 2000, 0)) > 0 && strcmp(income, "\n") != 0) {
-
+			printf("income: %s\n", income);
 			pthread_mutex_lock(&mutex);
-
+			
 			{
 				// adding new message to list
 				message_p new_msg 	= (message_p) malloc (sizeof (message));
@@ -116,29 +92,34 @@ void* client_handler(void *args) {
 				new_msg->message 	= income;
 
 				args_p->msg_p->message = new_msg->message;
+				args_p->msg_p++;
 				local++;
-
+			
 				printf("%s\n", new_msg->message);
 			}
-			 
 			pthread_mutex_unlock(&mutex);
-		}	
+			
+		} else if (recieved == -1) {
+			printf("Recv -1\n");
+			sleep(3);			
+		}
 
-		pthread_mutex_lock(&mutex);
+		pthread_mutex_lock(&mutex); 
 		// getting new messages from other
 		if (local != args_p->msg_p) {
 
 			while (local != args_p->msg_p) {
 				// actual message is ip + message text
-				char *msg = array_concat(local->message, ip, recieved);
-				send(new_client_fd, msg, strlen(msg), 0);
+				char *msg = strcat(local->message, ip);
+				send(args_p->socket_d, msg, strlen(msg), 0);
 				local++;
 			}
 		}
 		pthread_mutex_unlock(&mutex);
 
 	}
-	
+
+	free(income);
 } 
 
 // cur_size via ptr with purpose changing cur_size value only once inside this function
@@ -160,7 +141,7 @@ pthread_t* malloc_threads(pthread_t *threads_p, bool flag, int *cur_size) {
 void clients_handling (int socket_d) {
 
 	// messages list for all clients
-	message_p messages = (message_p) malloc (10000 * sizeof (message));
+	message_p messages = (message_p) malloc (1000 * sizeof (message));
 
 	// messages + file descriptor as arguments to each client thread
 	thread_args_p args_p = (thread_args_p) malloc (sizeof (thread_arguments));
@@ -168,62 +149,54 @@ void clients_handling (int socket_d) {
 
 	pthread_mutex_init(&mutex, NULL);
 	
-	pthread_t *threads = malloc_threads(threads, false, 0);
+	pthread_t *threads;
+	threads = malloc_threads(threads, false, 0);
 	pthread_t *start = threads; // for memory allocation moment check
 	
-	struct sockaddr_storage client_addr;
-	socklen_t addrsize = sizeof(client_addr);
-	
-	int status;
-	int new_client_fd;
-
 	int cur_size = NUM_CLIENTS;
 
-	while (true) {
+	while (1) {
 
-		if (new_client_fd = accept(socket_d, (struct sockaddr *) &client_addr, &addrsize) != -1) {
+		int new_client_fd;
+
+		struct sockaddr_storage client_address;
+		socklen_t addrsize = sizeof(client_address);
+
+		if (new_client_fd = accept(socket_d, (struct sockaddr *) &client_address, &addrsize) != -1) {
 
 			if (start + cur_size == threads) {
-				threads = malloc_threads(threads, true, &cur_size);	
+				threads = malloc_threads(threads, true, &cur_size);		
 			}
+
+			int status;
 			
-			args_p->socket_d = new_client_fd;
-			
+			args_p->socket_d 	= new_client_fd;
+			args_p->client_addr	= client_address;
+
+			printf("Clients handling socket: %d\n", args_p->socket_d);			
+		
 			status = pthread_create(threads++, NULL, client_handler, (void*) args_p);
-			
+			pthread_join(*(threads - 1), NULL);
+			printf("Thread status: %d\n", status);
 		}	
 	}	
 
+	
 }
 
 int main (int argc, char *argv[]) {
 
-	
-	int socket_d = socket(PF_INET, SOCK_STREAM, 0);
+	int socket_d = socket(AF_INET, SOCK_STREAM, 0);
 
 	struct sockaddr *socket_addr = (struct sockaddr *) network_setting();  
-	int b_res = bind(socket_d, socket_addr, sizeof *socket_addr);
+	int b_s = bind(socket_d, socket_addr, sizeof *socket_addr);
 
-	printf("%d\n", b_res);
+	printf("Bind status: %d\n", b_s);
 
-	int l_res = listen(socket_d, NUM_CLIENTS * 100);
+	int l_s = listen(socket_d, NUM_CLIENTS * 100);
 
-	printf("%d\n", l_res);
+	printf("Listen status: %d\n", l_s);
 
 	clients_handling(socket_d);
 
-/*
-	
-
-	struct sockaddr_in my_addr;
-	
-	
-	bind(socket_descr, (struct sockaddr *)&my_addr, sizeof my_addr);
-
-	listen(socket_d, 10);
-	
-	struct sockaddr_storage incoming_addr;
-	socklen_t addrsize = sizeof incoming_addr;
-
-	*/
 }

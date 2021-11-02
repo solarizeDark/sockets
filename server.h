@@ -1,3 +1,5 @@
+#include <sys/socket.h>
+
 #ifndef __SERVER_H__
 #define __SERVER_H__
 
@@ -16,6 +18,7 @@ typedef struct thread_args {
 
 	message_p msg_p;
 	int socket_d;
+	struct sockaddr_storage client_addr;
 	
 } thread_arguments;
 
