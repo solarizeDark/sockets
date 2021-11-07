@@ -1,21 +1,7 @@
 #ifndef	__QUEUE_H__
 #define	__QUEUE_H__
 
-typedef struct node * node_p;
-
-typedef struct node {
-
-	message data;
-	node_p next;
-	
-} node;
-
-typedef struct list {
-
-	node_p 	head;
-	node_p 	tail;
-	
-} list;
+#include <stdint.h>
 
 typedef struct message {
 
@@ -26,10 +12,24 @@ typedef struct message {
 	
 } message;
 
+typedef struct node {
+
+	message * data;
+	struct node * next;
+	
+} node;
+
+typedef struct list {
+
+	struct node * head;
+	struct node * tail;
+	
+} list;
+
 void	q_init();
-void 	q_push(char*);
+void 	q_push(struct message *);
 void 	q_memory_release();
-node_p 	q_pop();
-node_p	q_get_head();
+struct node* 	q_pop();
+struct node*	q_get_head();
 
 #endif

@@ -3,19 +3,19 @@
 #include "../include/queue.h"
 
 list messages; 
-node_p twink_head; // for memory realease
+struct node * twink_head; // for memory realease
 
 void q_init() {
 	messages.head = messages.tail = NULL;
 }
 
-node_p q_get_head() {
+struct node * q_get_head() {
 	return twink_head;
 }
 
-void q_push(struct message msg) {
+void q_push(struct message * msg) {
 
-	node_p temp = (node_p) malloc (sizeof(struct node));
+	struct node * temp = (struct node * ) malloc (sizeof(struct node));
 
 	temp->data = msg;
 	temp->next = NULL;
@@ -31,9 +31,9 @@ void q_push(struct message msg) {
 	
 }
 
-node_p q_pop() {
+struct node * q_pop() {
 
-	node_p temp = messages.head;
+	struct node * temp = messages.head;
 	messages.head  = temp->next;
 
 	return temp;	
@@ -41,8 +41,8 @@ node_p q_pop() {
 
 void q_memory_release() {
 
-	for (node_p i = twink_head; i != NULL;) {
-		node_p temp = i->next;
+	for (struct node * i = twink_head; i != NULL;) {
+		struct node * temp = i->next;
 		free(i);
 		i = temp;
 	}

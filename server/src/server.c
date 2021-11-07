@@ -17,12 +17,15 @@
 #include <unistd.h>
 #include <fcntl.h>
 
+#include <poll.h>
+#include <fcntl.h>
+
 #include "../include/server.h"
 #include "../../queue/include/queue.h"
 
 #define PORT 		3490
 #define NUM_CLIENTS 10		// also threads amount
-#define BUF_SIZE 	20
+#define BUF_SIZE 	200
 #define LABEL_START '\n'
 
 pthread_mutex_t mutex;
@@ -73,6 +76,79 @@ struct sockaddr_in * network_setting() {
 	return host;
 }
 
+void copy(char * f, char * s, int to_add) {
+
+	char *tf, *ts;
+	tf = f;
+	ts = s;
+	
+	for (int i = 0; i < to_add; i++) *ts++ = *tf++;
+
+}
+
+bool multi_chunk_message(char * buf, char * huge, int rc, bool state, int current_i);
+
+bool one_chunk_message(char * buf, char * huge, int rc) {
+
+	struct message * msg = (struct message *) buf;
+
+	if (*buf++ != LABEL_START) {
+		printf("Start error\n%d\n", *(buf - 1));
+	}
+	rc--;
+
+	if (msg->length = rc) {	
+		q_push(msg);
+		return true;
+	} else if (msg->length < rc) {
+
+		pthread_mutex_lock(&mutex);
+		q_push(msg);
+		pthread_mutex_unlock(&mutex);
+		
+		return one_chunk_message(buf + rc, huge, rc - msg->length);
+	} else {
+		return multi_chunk_message(buf, huge, rc, false, 0);
+	}
+}
+
+bool multi_chunk_message(char * buf, char * huge, int rc, bool state, int current_i) {
+
+	uint32_t length;
+
+	if (current_i == 0) { // first chunk of new message
+		length = ((struct message *) buf)->length;
+
+		huge = buf;
+		realloc(huge, length * sizeof(char));
+		return false; // message havent been got fully 
+
+	} else { // Nth chunk
+		length = ((struct message *) huge)->length;
+
+		// if buffer fully will go to huge, then current += recieved
+		// else left space have to be filled
+		int to_add = (length - current_i > rc) ? rc : length - current_i;
+
+		copy(buf, huge + current_i, to_add);
+		current_i += to_add; 
+		
+		if (to_add == length - current_i) { // full message
+
+			pthread_mutex_lock(&mutex);
+			q_push((struct message *) huge);
+			pthread_mutex_unlock(&mutex);
+
+			char *n_huge;
+			return one_chunk_message(buf, n_huge, rc - to_add);
+		} else {
+			return false;
+		}
+			
+	}
+	
+}
+
 void* get_message(void *args) {
 
 	thread_args_p args_p = (thread_args_p) args;
@@ -83,55 +159,53 @@ void* get_message(void *args) {
 		struct sockaddr	   *client_sockaddr 	= (struct sockaddr *) 	 	&(args_p->client_addr);
 		struct sockaddr_in *client_sockaddr_in 	= (struct sockaddr_in *) 	client_sockaddr; 
 		ip = inet_ntoa(client_sockaddr_in->sin_addr);
-	}
-	
-	struct message msg;
+	}	
 			
-	FILE * income = fdopen(args_p->socket_d, "r+"); 
-
+	// FILE * income = fdopen(args_p->socket_d, "r+"); 
+	struct pollfd fds = { .fd = args_p->socket_d, .events = POLLIN };	// ready to recieve data event set on descriptor
+	
+	char * buf  = (char *) calloc(BUF_SIZE, sizeof(char));
+	char * huge; 
+	bool state = true;
+	int current_i = 0;		// huge iterator
+	
 	while (1) {
 
-		int count = 0;
-		char buf[BUF_SIZE];
-	
-		char next = getc(income);
-	
-		if (next != LABEL_START) printf("Start find error\n");	
-
-		for (int i = 0; i < 4; i++) {
-			buf[count++] = getc(income);
-			msg.opcode = (int) (buf[0] << 24 | buf[1] << 16 | buf[2] << 8 | buf[3]);
-		}
-		
-		for (int i = 0; i < 4; i++) {
-			buf[count++] = getc(income);
-			msg.length = (int) (buf[4] << 24 | buf[5] << 16 | buf[6] << 8 | buf[7]);
+		int ready = poll(&fds, 1, 100);				// 100 milliseconds to wait
+			
+		if (ready == -1) {
+			printf("Poll error\n");
 		}
 
-		char payload[msg.length];
+		if (fds.revents != 0) {
 
-		for (int i = msg.length - 1; i >= 0; i--) {
-			payload[i] = getchar(income);
+			if (fds.revents & POLLIN) {
+
+				ssize_t rc = recv(args_p->socket_d, buf, BUF_SIZE, 0);
+				if (rc == -1) {
+					printf("Recieve error\n");
+				}
+
+				printf("JUST GOT: %d\n", *buf);
+				
+				if (state) {
+					state = one_chunk_message(buf, huge, rc);
+				} else {
+					state = multi_chunk_message(buf, huge, rc, false, current_i);
+				}
+				
+			}
+			
 		}
 
-		msg.payload = payload;
-		msg.crc = (short) (getc(income) | getc(income) << 8);
-
-		pthread_mutex_lock(&mutex);
-		q_push(msg);
-		pthread_mutex_unlock(&mutex);
-		
 	}
 
-	fclose(income);
 }
 
 void clients_add (int socket_d) {
 
 	// setting on non blocking 
 	if (fcntl(socket_d, F_SETFL, O_NONBLOCK) == -1) printf("Error while setting to nonblocking\n");
-
-	// init_mutex(); // queue mutex
 
 	thread_args_p args_p = (thread_args_p) malloc (100 * sizeof(thread_arguments));	// messages + file descriptor as arguments to each client thread
 
@@ -173,6 +247,15 @@ void clients_add (int socket_d) {
 	free(start);
 }
 
+void queue_print() {
+
+	struct node * temp;
+	while ((temp = q_pop()) != NULL) {
+		printf("%d\t%d\t%s\n", temp->data->opcode, temp->data->length, temp->data->payload);
+	}
+	
+}
+
 int main (int argc, char *argv[]) {
 
 	int socket_d = socket(AF_INET, SOCK_STREAM, 0);
@@ -193,4 +276,9 @@ int main (int argc, char *argv[]) {
 	q_init();
 	clients_add(socket_d);
 
+	int i;
+	scanf("%d", &i);
+	if (i == 0) {
+		queue_print();
+	}
 }
