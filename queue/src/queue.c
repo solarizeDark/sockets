@@ -20,7 +20,7 @@ void q_push(struct message * msg) {
 	temp->data = msg;
 	temp->next = NULL;
 
-	if (messages.head == messages.tail) {
+	if (messages.head == NULL) {
 		messages.head 		= temp;
 		messages.tail 		= temp;
 		twink_head			= temp;
@@ -32,6 +32,8 @@ void q_push(struct message * msg) {
 }
 
 struct node * q_pop() {
+
+	if (messages.head == NULL) return NULL;
 
 	struct node * temp = messages.head;
 	messages.head  = temp->next;

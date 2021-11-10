@@ -87,6 +87,7 @@ void copy(char * f, char * s, int to_add) {
 }
 
 bool multi_chunk_message(char * buf, char * huge, int rc, bool state, int current_i);
+void queue_print();
 
 bool one_chunk_message(char * buf, char * huge, int rc) {
 
@@ -99,6 +100,7 @@ bool one_chunk_message(char * buf, char * huge, int rc) {
 
 	if (msg->length = rc) {	
 		q_push(msg);
+		queue_print();
 		return true;
 	} else if (msg->length < rc) {
 
@@ -186,8 +188,6 @@ void* get_message(void *args) {
 					printf("Recieve error\n");
 				}
 
-				printf("JUST GOT: %d\n", *buf);
-				
 				if (state) {
 					state = one_chunk_message(buf, huge, rc);
 				} else {
@@ -276,9 +276,4 @@ int main (int argc, char *argv[]) {
 	q_init();
 	clients_add(socket_d);
 
-	int i;
-	scanf("%d", &i);
-	if (i == 0) {
-		queue_print();
-	}
 }
