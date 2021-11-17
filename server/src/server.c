@@ -18,9 +18,9 @@
 #include <fcntl.h>
 
 #include <poll.h>
-#include <fcntl.h>
 
 #include "../include/server.h"
+#include "../../fds_array/include/fds_array.h"
 #include "../../queue/include/queue.h"
 
 #define PORT 		3490
@@ -28,7 +28,30 @@
 #define BUF_SIZE 	200
 #define LABEL_START '\n'
 
-pthread_mutex_t mutex;
+
+// file descriptor will be monitored if it is ready to recieve data
+struct pollfd *fdsa;
+struct pollfd *fds_start;
+
+void set_fdsa() {
+
+	fdsa 		= (struct pollfd *) malloc (sizeof(struct pollfd) * CAPACITY);
+	fds_start	= fdsa;
+
+}
+
+void _ip(struct sockaddr_storage sas) {
+	
+	char *ip;
+	{	
+		// evil casting sockaddr_storage to sockaddr_in
+		struct sockaddr	   *client_sockaddr 	= (struct sockaddr *) 	 	&sas;
+		struct sockaddr_in *client_sockaddr_in 	= (struct sockaddr_in *) 	client_sockaddr; 
+		ip = inet_ntoa(client_sockaddr_in->sin_addr);
+	}	
+	printf("%s\n", ip);
+
+}
 
 struct in_addr get_local_ip () {
 
@@ -44,24 +67,14 @@ struct in_addr get_local_ip () {
 
 	printf("%s\n", inet_ntoa(((struct sockaddr_in*)&ifr.ifr_addr)->sin_addr));
 	return ((struct sockaddr_in*) &ifr.ifr_addr) -> sin_addr;
+
 }
 
-// cur_size via ptr with purpose changing cur_size value only once inside this function
-// flag will be setted to true if reallocation needed
-pthread_t* malloc_threads(pthread_t *threads_p, bool flag, int *cur_size) {
-	
-	// initial allocation for NUM_CLIENTS
-	threads_p = (pthread_t*) malloc(NUM_CLIENTS * sizeof (pthread_t));	
+/*
+	IP socket address = IP address + 16bit port number
+	AF_INET		Address family inet(ip)
 
-	if (flag) {
-		threads_p = (pthread_t*) realloc(threads_p, *cur_size += NUM_CLIENTS);
-		// threads_ptr moving to new block of data 
-		threads_p += *cur_size - NUM_CLIENTS;  
-	}
-
-	return threads_p;
-}
-
+*/
 struct sockaddr_in * network_setting() {
 
 	struct sockaddr_in *host = (struct sockaddr_in*) malloc (sizeof(struct sockaddr_in));
@@ -100,13 +113,11 @@ bool one_chunk_message(char * buf, char * huge, int rc) {
 
 	if (msg->length = rc) {	
 		q_push(msg);
-		queue_print();
+		// queue_print();
 		return true;
 	} else if (msg->length < rc) {
 
-		pthread_mutex_lock(&mutex);
 		q_push(msg);
-		pthread_mutex_unlock(&mutex);
 		
 		return one_chunk_message(buf + rc, huge, rc - msg->length);
 	} else {
@@ -122,7 +133,7 @@ bool multi_chunk_message(char * buf, char * huge, int rc, bool state, int curren
 		length = ((struct message *) buf)->length;
 
 		huge = buf;
-		realloc(huge, length * sizeof(char));
+		huge = realloc(huge, length * sizeof(char));
 		return false; // message havent been got fully 
 
 	} else { // Nth chunk
@@ -137,9 +148,7 @@ bool multi_chunk_message(char * buf, char * huge, int rc, bool state, int curren
 		
 		if (to_add == length - current_i) { // full message
 
-			pthread_mutex_lock(&mutex);
 			q_push((struct message *) huge);
-			pthread_mutex_unlock(&mutex);
 
 			char *n_huge;
 			return one_chunk_message(buf, n_huge, rc - to_add);
@@ -151,112 +160,90 @@ bool multi_chunk_message(char * buf, char * huge, int rc, bool state, int curren
 	
 }
 
-void* get_message(void *args) {
-
-	thread_args_p args_p = (thread_args_p) args;
-	
-	char *ip;
-	{	
-		// evil casting sockaddr_storage to sockaddr_in
-		struct sockaddr	   *client_sockaddr 	= (struct sockaddr *) 	 	&(args_p->client_addr);
-		struct sockaddr_in *client_sockaddr_in 	= (struct sockaddr_in *) 	client_sockaddr; 
-		ip = inet_ntoa(client_sockaddr_in->sin_addr);
-	}	
-			
-	// FILE * income = fdopen(args_p->socket_d, "r+"); 
-	struct pollfd fds = { .fd = args_p->socket_d, .events = POLLIN };	// ready to recieve data event set on descriptor
+bool get_message(int fd) {
 	
 	char * buf  = (char *) calloc(BUF_SIZE, sizeof(char));
 	char * huge; 
 	bool state = true;
-	int current_i = 0;		// huge iterator
-	
-	while (1) {
+	// huge iterator
+	int current_i = 0;
 
-		int ready = poll(&fds, 1, 100);				// 100 milliseconds to wait
-			
-		if (ready == -1) {
-			printf("Poll error\n");
-		}
+	ssize_t rc = recv(fd, buf, BUF_SIZE, 0);
 
-		if (fds.revents != 0) {
+	if (rc <= 0) {
+		return false;
+	}
 
-			if (fds.revents & POLLIN) {
-
-				ssize_t rc = recv(args_p->socket_d, buf, BUF_SIZE, 0);
-				if (rc == -1) {
-					printf("Recieve error\n");
-				}
-
-				if (state) {
-					state = one_chunk_message(buf, huge, rc);
-				} else {
-					state = multi_chunk_message(buf, huge, rc, false, current_i);
-				}
-				
-			}
-			
-		}
-
+	if (state) {
+		return one_chunk_message(buf, huge, rc);
+	} else {
+		return multi_chunk_message(buf, huge, rc, false, current_i);
 	}
 
 }
 
-void clients_add (int socket_d) {
+void accept_new_client(int socket_d) {
+	struct sockaddr_storage client_address;
+	socklen_t addrsize = sizeof(client_address);
 
-	// setting on non blocking 
-	if (fcntl(socket_d, F_SETFL, O_NONBLOCK) == -1) printf("Error while setting to nonblocking\n");
+	int client_fd;
 
-	thread_args_p args_p = (thread_args_p) malloc (100 * sizeof(thread_arguments));	// messages + file descriptor as arguments to each client thread
+	if ((client_fd = accept(socket_d, (struct sockaddr *) &client_address, &addrsize)) != -1) {
+		fds_add(fds_start, &fdsa, client_fd);
+	}
+}
 
-	pthread_mutex_init(&mutex, NULL);
-	
-	pthread_t *threads = malloc_threads(threads, false, 0);
-	pthread_t *start = threads; // for memory allocation moment check
-	
-	int cur_size = NUM_CLIENTS;
+void main_loop (int main_fd) {
+
+	// setting to non blocking
+	// F_SETFL sets file flags specified by 3rd arg 
+	if (fcntl(main_fd, F_SETFL, O_NONBLOCK) == -1) printf("Error while setting to nonblocking\n");
+
+	// first socket is server main listener
+	fdsa->fd 		= main_fd; 
+	fdsa->events	= POLLIN;
+
+	fdsa++;	
 
 	while (1) {
 
-		int client_fd;
+		int events = poll(fds_start, fdsa - fds_start, 1000);
 
-		struct sockaddr_storage client_address;
-		socklen_t addrsize = sizeof(client_address);
-
-		if ((client_fd = accept(socket_d, (struct sockaddr *) &client_address, &addrsize)) != -1) {
-
-			// setting on non blocking 
-			if (fcntl(client_fd, F_SETFL, O_NONBLOCK) == -1) printf("Error while setting to nonblocking\n");
-
-			if (start + cur_size == threads) {
-				threads = malloc_threads(threads, true, &cur_size);		
+		// on one of fd event has occurred
+		if (events != 0) {
+			// going through descriptors
+			for (struct pollfd *temp = fds_start; temp != fdsa; temp++) {
+				// found exact fd
+				if (temp->revents && POLLIN) {
+					
+					// main server listener, means new client occurred
+					if (temp->fd == main_fd) {
+						printf("accept\n");
+						accept_new_client(main_fd);
+					} else {
+						get_message(temp->fd);
+						queue_print();
+					}
+				}
 			}
 
-			int status;
-			
-			args_p->socket_d 	= client_fd;
-			args_p->client_addr	= client_address;
-
-			status = pthread_create(threads++, NULL, get_message, (void*) args_p);
-			// pthread_join(*(threads - 1), NULL);
-			printf("Thread status: %d\n", status);
 		}	
 	}	
 
-	pthread_mutex_destroy(&mutex);	
-	free(start);
 }
 
 void queue_print() {
 
 	struct node * temp;
 	while ((temp = q_pop()) != NULL) {
-		printf("%d\t%d\t%s\n", temp->data->opcode, temp->data->length, temp->data->payload);
+		printf("%d\t%d\n", temp->data->opcode, temp->data->length);
 	}
 	
 }
 
 int main (int argc, char *argv[]) {
+
+	set_fdsa();
 
 	int socket_d = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -274,6 +261,6 @@ int main (int argc, char *argv[]) {
 	printf("Listen status: %d\n", l_s);
 
 	q_init();
-	clients_add(socket_d);
+	main_loop(socket_d);
 
 }

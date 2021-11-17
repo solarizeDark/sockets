@@ -14,7 +14,7 @@ typedef struct message {
 
 typedef struct node {
 
-	message * data;
+	struct message * data;
 	struct node * next;
 	
 } node;

@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <stdio.h>
 
 #include "../include/queue.h"
 
@@ -15,7 +16,7 @@ struct node * q_get_head() {
 
 void q_push(struct message * msg) {
 
-	struct node * temp = (struct node * ) malloc (sizeof(struct node));
+	struct node * temp = (struct node *) malloc(sizeof(struct node *));
 
 	temp->data = msg;
 	temp->next = NULL;
@@ -36,7 +37,7 @@ struct node * q_pop() {
 	if (messages.head == NULL) return NULL;
 
 	struct node * temp = messages.head;
-	messages.head  = temp->next;
+	messages.head = temp->next;
 
 	return temp;	
 }
