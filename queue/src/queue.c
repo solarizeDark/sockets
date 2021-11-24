@@ -14,7 +14,7 @@ struct node * q_get_head() {
 	return twink_head;
 }
 
-void q_push(struct message * msg) {
+void q_push(void * msg) {
 
 	struct node * temp = (struct node *) malloc(sizeof(struct node *));
 

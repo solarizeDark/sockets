@@ -14,7 +14,7 @@ typedef struct message {
 
 typedef struct node {
 
-	struct message * data;
+	void * data;
 	struct node * next;
 	
 } node;
@@ -27,7 +27,7 @@ typedef struct list {
 } list;
 
 void	q_init();
-void 	q_push(struct message *);
+void 	q_push(void *);
 void 	q_memory_release();
 struct node* 	q_pop();
 struct node*	q_get_head();

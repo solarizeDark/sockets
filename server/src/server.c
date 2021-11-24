@@ -20,6 +20,7 @@
 #include <poll.h>
 
 #include "../include/server.h"
+#include "../include/chat.h"
 #include "../../fds_array/include/fds_array.h"
 #include "../../queue/include/queue.h"
 
@@ -72,7 +73,7 @@ struct in_addr get_local_ip () {
 
 /*
 	IP socket address = IP address + 16bit port number
-	AF_INET		Address family inet(ip)
+	AF_INET		Address family inet(ipv4)
 
 */
 struct sockaddr_in * network_setting() {
@@ -89,100 +90,9 @@ struct sockaddr_in * network_setting() {
 	return host;
 }
 
-void copy(char * f, char * s, int to_add) {
-
-	char *tf, *ts;
-	tf = f;
-	ts = s;
-	
-	for (int i = 0; i < to_add; i++) *ts++ = *tf++;
-
-}
-
-bool multi_chunk_message(char * buf, char * huge, int rc, bool state, int current_i);
-void queue_print();
-
-bool one_chunk_message(char * buf, char * huge, int rc) {
-
-	struct message * msg = (struct message *) buf;
-
-	if (*buf++ != LABEL_START) {
-		printf("Start error\n%d\n", *(buf - 1));
-	}
-	rc--;
-
-	if (msg->length = rc) {	
-		q_push(msg);
-		// queue_print();
-		return true;
-	} else if (msg->length < rc) {
-
-		q_push(msg);
-		
-		return one_chunk_message(buf + rc, huge, rc - msg->length);
-	} else {
-		return multi_chunk_message(buf, huge, rc, false, 0);
-	}
-}
-
-bool multi_chunk_message(char * buf, char * huge, int rc, bool state, int current_i) {
-
-	uint32_t length;
-
-	if (current_i == 0) { // first chunk of new message
-		length = ((struct message *) buf)->length;
-
-		huge = buf;
-		huge = realloc(huge, length * sizeof(char));
-		return false; // message havent been got fully 
-
-	} else { // Nth chunk
-		length = ((struct message *) huge)->length;
-
-		// if buffer fully will go to huge, then current += recieved
-		// else left space have to be filled
-		int to_add = (length - current_i > rc) ? rc : length - current_i;
-
-		copy(buf, huge + current_i, to_add);
-		current_i += to_add; 
-		
-		if (to_add == length - current_i) { // full message
-
-			q_push((struct message *) huge);
-
-			char *n_huge;
-			return one_chunk_message(buf, n_huge, rc - to_add);
-		} else {
-			return false;
-		}
-			
-	}
-	
-}
-
-bool get_message(int fd) {
-	
-	char * buf  = (char *) calloc(BUF_SIZE, sizeof(char));
-	char * huge; 
-	bool state = true;
-	// huge iterator
-	int current_i = 0;
-
-	ssize_t rc = recv(fd, buf, BUF_SIZE, 0);
-
-	if (rc <= 0) {
-		return false;
-	}
-
-	if (state) {
-		return one_chunk_message(buf, huge, rc);
-	} else {
-		return multi_chunk_message(buf, huge, rc, false, current_i);
-	}
-
-}
-
 void accept_new_client(int socket_d) {
+
+	// sockaddr_storage will fit both ipv4 and ipv6
 	struct sockaddr_storage client_address;
 	socklen_t addrsize = sizeof(client_address);
 
@@ -193,7 +103,7 @@ void accept_new_client(int socket_d) {
 	}
 }
 
-void main_loop (int main_fd) {
+void main_loop (int main_fd, void (*message_reciever)(void *) ) {
 
 	// setting to non blocking
 	// F_SETFL sets file flags specified by 3rd arg 
@@ -221,7 +131,7 @@ void main_loop (int main_fd) {
 						printf("accept\n");
 						accept_new_client(main_fd);
 					} else {
-						get_message(temp->fd);
+						(*message_reciever)((void *)temp->fd);
 						queue_print();
 					}
 				}
@@ -232,35 +142,45 @@ void main_loop (int main_fd) {
 
 }
 
-void queue_print() {
+int strcmp(char *f, char *s) {
 
-	struct node * temp;
-	while ((temp = q_pop()) != NULL) {
-		printf("%d\t%d\n", temp->data->opcode, temp->data->length);
-	}
+	for (; *f++ == *s++; )
+		if (*f == '\0') return 0;
+	return *f - *s > 0 ? 1 : -1;
 	
 }
 
-int main (int argc, char *argv[]) {
+int option(int argc, char **argv) {
+
+	// chat default
+	if (argc < 2) {
+		return 0;
+	}
+	// 0 for chat 1 for complex modules
+	return strcmp(argv[1], "-c") == 0 ? 0 : 1;
+
+}
+
+void socket_setting(int fd) {
+
+	// getting local ipv4 address
+	// could get all needed info by getaddinfo() function, network_setting() - manually
+	struct sockaddr *socket_addr = (struct sockaddr *) network_setting();  
+
+	int socket_d = socket(AF_INET, SOCK_STREAM, 0);
+	int bind_s = bind(socket_d, socket_addr, sizeof(*socket_addr));
+	int listen_s = listen(socket_d, NUM_CLIENTS);	
+	
+}
+
+int main (int argc, char **argv) {
+
+	int mode = option(argc, argv);
 
 	set_fdsa();
 
-	int socket_d = socket(AF_INET, SOCK_STREAM, 0);
 
-	struct sockaddr_storage client_address;
-	socklen_t addrsize = sizeof(client_address);
 
-	struct sockaddr *socket_addr = (struct sockaddr *) network_setting();  
-
-	int b_s = bind(socket_d, socket_addr, sizeof(*socket_addr));
-
-	printf("Bind status: %d\n", b_s);
-
-	int l_s = listen(socket_d, NUM_CLIENTS);
-
-	printf("Listen status: %d\n", l_s);
-
-	q_init();
-	main_loop(socket_d);
+	main_loop(socket_d, (void (*)(void*)) argv[1] == "plain" ? get_plain_text : get_message );
 
 }
