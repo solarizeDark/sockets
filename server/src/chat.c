@@ -1,8 +1,12 @@
+#include <stdlib.h>
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/socket.h>
 #include <stdio.h>
 
 #define BUF_SIZE 200
 
-void get_message(int *fd) {
+void get_message_chat(int *fd) {
 
 	char *buf = (char *) malloc(sizeof(char) * BUF_SIZE);
 	ssize_t rc = recv(*fd, buf, BUF_SIZE, 0);

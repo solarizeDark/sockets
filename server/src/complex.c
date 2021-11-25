@@ -19,6 +19,7 @@
 
 #include <poll.h>
 
+#include "../include/complex.h"
 #include "../../queue/include/queue.h"
 
 #define BUF_SIZE 	200
@@ -92,7 +93,7 @@ bool multi_chunk_message(char * buf, char * huge, int rc, bool state, int curren
 	
 }
 
-bool get_message(int *fd) {
+bool get_message_complex(int *fd) {
 	
 	char * buf  = (char *) calloc(BUF_SIZE, sizeof(char));
 	char * huge; 

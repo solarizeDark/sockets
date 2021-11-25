@@ -21,10 +21,11 @@
 
 #include "../include/server.h"
 #include "../include/chat.h"
+#include "../include/complex.h"
 #include "../../fds_array/include/fds_array.h"
 #include "../../queue/include/queue.h"
 
-#define PORT 		3490
+#define PORT 		"3490"
 #define NUM_CLIENTS 10		// also threads amount
 #define BUF_SIZE 	200
 #define LABEL_START '\n'
@@ -75,19 +76,23 @@ struct in_addr get_local_ip () {
 	IP socket address = IP address + 16bit port number
 	AF_INET		Address family inet(ipv4)
 
+	AI_PASSIVE flags and NULL node set socket to accepting connections
 */
-struct sockaddr_in * network_setting() {
+struct addrinfo * network_setting() {
 
-	struct sockaddr_in *host = (struct sockaddr_in*) malloc (sizeof(struct sockaddr_in));
-	  
-	host->sin_family 		= AF_INET;
-	host->sin_port 			= htons(PORT);
-	// host->sin_addr.s_addr 	= get_local_ip().s_addr;
-	host->sin_addr.s_addr 	= inet_addr("127.0.0.1");
-	 
-	memset(host->sin_zero, '\0', sizeof(host));
+	struct addrinfo hint, *res;
 
-	return host;
+	hint.ai_family		= AF_INET;
+	hint.ai_socktype	= SOCK_STREAM;
+	hint.ai_flags		= AI_PASSIVE;
+
+	int info_status;
+	if ((info_status = getaddrinfo(NULL, PORT, &hint, &res)) != 0) {
+		printf("Getting info: %s, line: %d\n", gai_strerror(info_status), __LINE__);
+		exit(EXIT_FAILURE);
+	}	
+
+	return res;
 }
 
 void accept_new_client(int socket_d) {
@@ -103,7 +108,7 @@ void accept_new_client(int socket_d) {
 	}
 }
 
-void main_loop (int main_fd, void (*message_reciever)(void *) ) {
+void main_loop (int main_fd, void (*message_reciever)(int *) ) {
 
 	// setting to non blocking
 	// F_SETFL sets file flags specified by 3rd arg 
@@ -131,8 +136,7 @@ void main_loop (int main_fd, void (*message_reciever)(void *) ) {
 						printf("accept\n");
 						accept_new_client(main_fd);
 					} else {
-						(*message_reciever)((void *)temp->fd);
-						queue_print();
+						(*message_reciever)(&temp->fd);
 					}
 				}
 			}
@@ -140,14 +144,6 @@ void main_loop (int main_fd, void (*message_reciever)(void *) ) {
 		}	
 	}	
 
-}
-
-int strcmp(char *f, char *s) {
-
-	for (; *f++ == *s++; )
-		if (*f == '\0') return 0;
-	return *f - *s > 0 ? 1 : -1;
-	
 }
 
 int option(int argc, char **argv) {
@@ -161,16 +157,42 @@ int option(int argc, char **argv) {
 
 }
 
-void socket_setting(int fd) {
+int socket_setting() {
 
-	// getting local ipv4 address
-	// could get all needed info by getaddinfo() function, network_setting() - manually
-	struct sockaddr *socket_addr = (struct sockaddr *) network_setting();  
+	struct addrinfo *res = (struct addrinfo *) network_setting();  
 
-	int socket_d = socket(AF_INET, SOCK_STREAM, 0);
-	int bind_s = bind(socket_d, socket_addr, sizeof(*socket_addr));
-	int listen_s = listen(socket_d, NUM_CLIENTS);	
-	
+	int socket_d;
+	struct addrinfo * temp = res;
+	for (; temp != NULL; temp = temp->ai_next) {
+		if ((socket_d = socket(temp->ai_family, temp->ai_socktype, temp->ai_protocol)) == -1) continue;
+
+		int on = 1;
+		// SO_REUSEADDR allows other sockets bind to port, unless there is an active listening socket
+		if (setsockopt(socket_d, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(int)) == -1) {
+			printf("setsockopt error\n");
+			exit(EXIT_FAILURE);
+		}
+
+		if (bind(socket_d, temp->ai_addr, temp->ai_addrlen) == -1) {
+			close(socket_d);
+			continue;
+		}
+		
+		break;
+	}
+
+	if (temp == NULL) {
+		printf("binding error\n");
+		exit(EXIT_FAILURE);
+	}
+
+	if (listen(socket_d, 10) == -1) {
+		printf("listening error\n");
+		exit(EXIT_FAILURE);
+	}
+
+	freeaddrinfo(res);
+	return socket_d;
 }
 
 int main (int argc, char **argv) {
@@ -178,9 +200,8 @@ int main (int argc, char **argv) {
 	int mode = option(argc, argv);
 
 	set_fdsa();
+	int socket_d = socket_setting();
 
-
-
-	main_loop(socket_d, (void (*)(void*)) argv[1] == "plain" ? get_plain_text : get_message );
+	main_loop(socket_d, (void (*)(int*)) (mode == 0 ? get_message_chat : get_message_complex ));
 
 }
